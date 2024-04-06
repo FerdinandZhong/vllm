@@ -44,6 +44,9 @@ try:
                 logger.exception(msg)
                 raise e
 
+        def check_worker_status(self) -> bool:
+            return self.worker is not None
+
         def get_node_ip(self) -> str:
             return get_ip()
 

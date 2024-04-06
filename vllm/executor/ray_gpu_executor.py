@@ -89,6 +89,7 @@ class RayGPUExecutor(ExecutorBase):
 
         # Create the workers.
         driver_ip = get_ip()
+        logger.info(placement_group.bundle_specs)
         for bundle_id, bundle in enumerate(placement_group.bundle_specs):
             if not bundle.get("GPU", 0):
                 continue
@@ -103,6 +104,7 @@ class RayGPUExecutor(ExecutorBase):
                 scheduling_strategy=scheduling_strategy,
                 **ray_remote_kwargs,
             )(RayWorkerVllm).remote(self.model_config.trust_remote_code)
+            logger.info(worker)
 
             worker_ip = ray.get(worker.get_node_ip.remote())
             if worker_ip == driver_ip and self.driver_dummy_worker is None:
@@ -119,6 +121,7 @@ class RayGPUExecutor(ExecutorBase):
                 "adjusting the Ray placement group or running the driver on a "
                 "GPU node.")
 
+        logger.info(self.driver_dummy_worker)
         # Get the set of GPU IDs used on each node.
         driver_node_id, driver_gpu_ids = ray.get(
             self.driver_dummy_worker.get_node_and_gpu_ids.remote())
@@ -161,19 +164,54 @@ class RayGPUExecutor(ExecutorBase):
                 zip(self.workers, worker_node_and_gpu_ids),
                 start=1,
         ):
-            local_rank = node_workers[node_id].index(rank)
-            worker.init_worker.remote(
-                lambda rank=rank, local_rank=local_rank: Worker(
-                    model_config,
-                    parallel_config,
-                    scheduler_config,
-                    device_config,
-                    local_rank,
-                    rank,
-                    distributed_init_method,
-                    lora_config=lora_config,
-                    kv_cache_dtype=kv_cache_dtype,
-                ))
+            try:
+                local_rank = node_workers[node_id].index(rank)
+                worker.init_worker.remote(
+                    lambda rank=rank, local_rank=local_rank: Worker(
+                        model_config,
+                        parallel_config,
+                        scheduler_config,
+                        device_config,
+                        local_rank,
+                        rank,
+                        distributed_init_method,
+                        lora_config=lora_config,
+                        kv_cache_dtype=kv_cache_dtype,
+                    ))
+                assert ray.get(worker.check_worker_status.remote()), "Worker is not started correctly"
+            except (AssertionError, RuntimeError, ray.exceptions.RayTaskError) as e:
+                # need to kill the old worker
+                logger.info(f"Caught error: {str(e)}")
+                ray.kill(worker) 
+                scheduling_strategy = PlacementGroupSchedulingStrategy(
+                    placement_group=placement_group,
+                    placement_group_capture_child_tasks=True,
+                    placement_group_bundle_index=1,
+                )
+                new_worker = ray.remote(
+                    num_cpus=0,
+                    num_gpus=num_gpus,
+                    scheduling_strategy=scheduling_strategy,
+                    **ray_remote_kwargs,
+                )(RayWorkerVllm).remote(self.model_config.trust_remote_code)
+                logger.info(new_worker)
+                new_worker.init_worker.remote(
+                    # new worker need to have local_rank as 0 without cuda device being set
+                    # ray has done the resource isolation
+                    lambda rank=rank: Worker(
+                        model_config,
+                        parallel_config,
+                        scheduler_config,
+                        device_config,
+                        0,
+                        rank,
+                        distributed_init_method,
+                        lora_config=lora_config,
+                        kv_cache_dtype=kv_cache_dtype,
+                    ))
+                new_worker.set_cuda_visible_devices.remote(node_gpus[node_id])
+                self.workers[rank-1] = new_worker
+
 
         # Initialize the driver worker with the Worker class.
         driver_rank = 0

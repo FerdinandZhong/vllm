@@ -8,6 +8,7 @@ import torch.distributed
 
 from vllm.config import (CacheConfig, DeviceConfig, LoRAConfig, ModelConfig,
                          ParallelConfig, SchedulerConfig, VisionLanguageConfig)
+from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
 from vllm.model_executor.parallel_utils import pynccl_utils
@@ -19,6 +20,8 @@ from vllm.model_executor.parallel_utils.parallel_state import (
 from vllm.sequence import SamplerOutput, SequenceGroupMetadata
 from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.model_runner import ModelRunner
+
+logger = init_logger(__name__)
 
 
 class Worker:
@@ -60,15 +63,35 @@ class Worker:
             assert not self.lora_config, (
                 "To be tested: vision language model with LoRA settings.")
 
-        self.model_runner = ModelRunner(
-            model_config,
-            parallel_config,
-            scheduler_config,
-            device_config,
-            lora_config=self.lora_config,
-            kv_cache_dtype=kv_cache_dtype,
-            is_driver_worker=is_driver_worker,
-            vision_language_config=vision_language_config)
+        # try:
+        #     self.model_runner = ModelRunner(
+        #         model_config,
+        #         parallel_config,
+        #         scheduler_config,
+        #         device_config,
+        #         lora_config=self.lora_config,
+        #         kv_cache_dtype=kv_cache_dtype,
+        #         is_driver_worker=is_driver_worker,
+        #         vision_language_config=vision_language_config)
+        # except torch.cuda.DeferredCudaCallError:
+        logger.info(f"local rank: {local_rank}, rank: {rank}")
+        if local_rank == 0:
+            self.model_runner = ModelRunner(
+                model_config,
+                parallel_config,
+                scheduler_config,
+                device_config,
+                lora_config=self.lora_config,
+                kv_cache_dtype=kv_cache_dtype,
+                is_driver_worker=is_driver_worker,
+                vision_language_config=vision_language_config)
+        else:
+            msg = "Error with torch getting cuda device property"
+            logger.warning(msg)
+
+            raise RuntimeError(msg)
+
+
         # Uninitialized cache engine. Will be initialized by
         # self.init_cache_engine().
         self.cache_config = None
