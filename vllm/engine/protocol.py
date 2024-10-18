@@ -170,13 +170,15 @@ class EngineClient(ABC):
             request_id=request_id,
             prompt=prompt_text,
             outputs=[
-                CompletionOutput(
-                    text=beam.text,
-                    cumulative_logprob=beam.cum_logprob,
-                    token_ids=beam.tokens[tokenized_length:],
-                    index=i,
-                    logprobs=beam.logprobs,
-                ) for (i, beam) in enumerate(best_beams)
+                CompletionOutput(text=beam.text,
+                                 cumulative_logprob=beam.cum_logprob,
+                                 token_ids=beam.tokens[tokenized_length:],
+                                 index=i,
+                                 logprobs=beam.logprobs,
+                                 finish_reason=beam.finish_reason if
+                                 beam.finish_reason is not None else "length",
+                                 stop_reason=beam.stop_reason)
+                for (i, beam) in enumerate(best_beams)
             ],
             finished=True,
             prompt_token_ids=tokenized_prompt,
