@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM Instance Manager</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161b22'/%3E%3Cpath d='M8 7l4 18h2l4-12 4 12h2l4-18h-3l-2.5 12L15 7h-2l-3.5 12L7 7H8z' fill='%2358a6ff'/%3E%3C/svg%3E">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────── */
+  .header {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; color: #f0f6fc; }
+  .pill {
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #21262d;
+    color: #8b949e;
+    transition: background 0.2s, color 0.2s;
+  }
+  .pill.active { background: #1f6feb33; color: #58a6ff; }
+
+  /* ── Layout ─────────────────────────────────────────────────────────── */
+  .container { max-width: 1080px; margin: 0 auto; padding: 24px 20px; }
+  .grid { display: grid; grid-template-columns: 360px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+
+  /* ── Card ────────────────────────────────────────────────────────────── */
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #8b949e;
+    margin-bottom: 16px;
+  }
+
+  /* ── Form ────────────────────────────────────────────────────────────── */
+  label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 5px; }
+  .field { margin-bottom: 14px; }
+  textarea, input[type="text"], input[type="password"] {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+    transition: border-color .15s;
+  }
+  textarea { resize: vertical; min-height: 70px; }
+  textarea:focus, input:focus { outline: none; border-color: #388bfd; }
+  .hint { font-size: 11px; color: #6e7681; margin-top: 4px; line-height: 1.4; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity .15s;
+    white-space: nowrap;
+  }
+  .btn:hover { opacity: .82; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-launch { background: #238636; color: #fff; width: 100%; justify-content: center; }
+  .btn-stop   { background: #da3633; color: #fff; padding: 4px 10px; font-size: 12px; }
+  .btn-copy   { background: #21262d; color: #8b949e; padding: 4px 10px; font-size: 12px; }
+
+  .status-bar {
+    margin-top: 12px;
+    font-size: 12px;
+    min-height: 16px;
+    padding: 6px 10px;
+    border-radius: 5px;
+    display: none;
+  }
+  .status-bar.show { display: block; }
+  .status-bar.ok  { background: #0d4429; color: #3fb950; border: 1px solid #1a7f37; }
+  .status-bar.err { background: #3d1c1c; color: #f85149; border: 1px solid #6e1c1c; }
+  .status-bar.inf { background: #1c2b3a; color: #58a6ff; border: 1px solid #1f3d5c; }
+
+  /* ── Table ───────────────────────────────────────────────────────────── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #6e7681;
+    border-bottom: 1px solid #30363d;
+  }
+  td { padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #21262d; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1c2128; }
+
+  .mono { font-family: 'SF Mono', 'Consolas', 'Menlo', monospace; font-size: 12px; }
+  .cmd-cell {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #e6edf3;
+  }
+  .ep-cell { display: flex; align-items: center; gap: 6px; }
+  .ep-text { color: #58a6ff; font-family: monospace; font-size: 12px; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-running  { background: #0d4429; color: #3fb950; }
+  .badge-starting { background: #2d2000; color: #d29922; }
+  .badge-exited   { background: #3d1c1c; color: #f85149; }
+
+  .empty-row td {
+    text-align: center;
+    color: #6e7681;
+    padding: 40px;
+    font-size: 14px;
+  }
+
+  /* ── Help box ────────────────────────────────────────────────────────── */
+  .help-box {
+    background: #1c2128;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-top: 16px;
+    font-size: 12px;
+    color: #8b949e;
+    line-height: 1.7;
+  }
+  .help-box code {
+    background: #0d1117;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #79c0ff;
+    font-family: monospace;
+  }
+
+  /* ── Test panel ─────────────────────────────────────────────────────── */
+  .test-section { margin-top: 24px; }
+  .test-controls { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .test-controls .field { margin-bottom: 0; flex: 1; min-width: 150px; }
+  .test-controls select {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  }
+  .test-controls select:focus { outline: none; border-color: #388bfd; }
+  .btn-test { background: #1f6feb; color: #fff; min-width: 120px; justify-content: center; }
+  .test-output {
+    margin-top: 14px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+    font-size: 13px;
+    color: #c9d1d9;
+    min-height: 80px;
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+  .test-output .placeholder { color: #6e7681; font-style: italic; }
+  .test-meta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #6e7681;
+    display: flex;
+    gap: 16px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>vLLM Instance Manager</h1>
+  <span class="pill" id="slot-pill">— / — slots</span>
+  <span class="pill" id="status-pill">connecting…</span>
+</div>
+
+<div class="container">
+  <div class="grid">
+
+    <!-- ── Launch panel ─────────────────────────────────────────────── -->
+    <div>
+      <div class="card">
+        <div class="card-title">Launch Instance</div>
+
+        <div class="field">
+          <label for="cmd-input">Model + arguments</label>
+          <textarea id="cmd-input" rows="3"
+            placeholder="Qwen/Qwen3-27B --tensor-parallel-size 4 --max-model-len 4096"></textarea>
+          <p class="hint">
+            Enter the HuggingFace model ID followed by any <code>vllm serve</code> flags.
+            <code>--port</code> and <code>--host</code> are set automatically.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="hf-token">HuggingFace token <span style="color:#6e7681">(optional — for gated models)</span></label>
+          <input type="password" id="hf-token" placeholder="hf_…">
+          <p class="hint">Leave empty to use the token already set in the environment.</p>
+        </div>
+
+        <button class="btn btn-launch" id="launch-btn" onclick="launchInstance()">
+          ▶ Launch
+        </button>
+        <div class="status-bar" id="launch-status"></div>
+      </div>
+
+      <div class="help-box">
+        <strong style="color:#c9d1d9">Routing</strong><br>
+        Each instance is reachable at:<br>
+        <code>/vllm/&lt;slot&gt;/v1/</code> (OpenAI-compatible)<br><br>
+        Example — chat completions for slot 1:<br>
+        <code>POST /vllm/1/v1/chat/completions</code><br><br>
+        Log files: <code>/tmp/vllm_slot_&lt;n&gt;.log</code>
+      </div>
+    </div>
+
+    <!-- ── Instances table ───────────────────────────────────────────── -->
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Running Instances</span>
+        <span style="font-size:11px;color:#6e7681;text-transform:none;letter-spacing:0">
+          auto-refreshes every 5 s
+        </span>
+      </div>
+      <div class="table-wrap" id="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Slot</th>
+              <th>Command</th>
+              <th>Port</th>
+              <th>Status</th>
+              <th>API Endpoint</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="instances-tbody">
+            <tr class="empty-row"><td colspan="6">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Test Chat Completions ──────────────────────────────────────── -->
+  <div class="test-section">
+    <div class="card">
+      <div class="card-title">Test Chat Completions</div>
+      <div class="test-controls">
+        <div class="field" style="flex:0 0 120px;min-width:120px">
+          <label for="test-slot">Instance</label>
+          <select id="test-slot">
+            <option value="">No instances</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="test-msg">Message</label>
+          <input type="text" id="test-msg" value="who are you?" placeholder="Enter a message…">
+        </div>
+        <button class="btn btn-test" id="test-btn" onclick="sendTestRequest()">
+          ▶ Send
+        </button>
+      </div>
+      <div class="test-output" id="test-output">
+        <span class="placeholder">Response will appear here…</span>
+      </div>
+      <div class="test-meta" id="test-meta"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const ORIGIN = window.location.origin;
+
+// ── Fetch + render ──────────────────────────────────────────────────────────
+async function fetchInstances() {
+  try {
+    const r    = await fetch('/api/instances');
+    const data = await r.json();
+    renderInstances(data.instances || []);
+    updateTestSlots(data.instances || []);
+
+    const used = data.instances.length;
+    const max  = data.max_slots || '?';
+    document.getElementById('slot-pill').textContent = `${used} / ${max} slots`;
+    document.getElementById('slot-pill').className   = used > 0 ? 'pill active' : 'pill';
+    document.getElementById('status-pill').textContent = 'connected';
+    document.getElementById('status-pill').className   = 'pill active';
+  } catch (_) {
+    document.getElementById('status-pill').textContent = 'disconnected';
+    document.getElementById('status-pill').className   = 'pill';
+  }
+}
+
+async function fetchHealth() {
+  try {
+    const r    = await fetch('/api/health');
+    const data = await r.json();
+    // Patch max slots into next render
+    window._maxSlots = data.slots_max;
+  } catch (_) {}
+}
+
+function renderInstances(instances) {
+  const tbody = document.getElementById('instances-tbody');
+  if (!instances.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No instances running — launch one on the left.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = instances.map(inst => {
+    const ep    = `${ORIGIN}/vllm/${inst.slot}/v1`;
+    const badge = inst.status === 'running'
+      ? '<span class="badge badge-running">running</span>'
+      : inst.status === 'exited'
+        ? '<span class="badge badge-exited">exited</span>'
+        : '<span class="badge badge-starting">starting</span>';
+    const age = formatAge(inst.started_at);
+    return `<tr>
+      <td><span class="mono" style="color:#f0f6fc">${inst.slot}</span></td>
+      <td><span class="cmd-cell mono" title="${esc(inst.cmd)}">${esc(truncate(inst.cmd, 45))}</span></td>
+      <td><span class="mono">:${inst.port}</span></td>
+      <td>${badge}<br><span style="font-size:11px;color:#6e7681">${age}</span></td>
+      <td>
+        <div class="ep-cell">
+          <span class="ep-text">${ep}</span>
+          <button class="btn btn-copy" onclick="copyText('${ep}')">copy</button>
+        </div>
+      </td>
+      <td><button class="btn btn-stop" onclick="stopInstance(${inst.slot})">Stop</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Actions ─────────────────────────────────────────────────────────────────
+async function launchInstance() {
+  const cmd      = document.getElementById('cmd-input').value.trim();
+  const hfToken  = document.getElementById('hf-token').value.trim();
+  const btn      = document.getElementById('launch-btn');
+
+  if (!cmd) { showStatus('Enter a model ID or command.', 'err'); return; }
+
+  btn.disabled = true;
+  showStatus('Sending launch request…', 'inf');
+
+  try {
+    const body = { cmd };
+    if (hfToken) body.hf_token = hfToken;
+
+    const r    = await fetch('/api/launch', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await r.json();
+
+    if (r.ok) {
+      showStatus(
+        `Instance ${data.slot} started on port ${data.port} (pid ${data.pid}). ` +
+        `Model loading — check log at /tmp/vllm_slot_${data.slot}.log`, 'ok');
+      fetchInstances();
+    } else {
+      showStatus(data.error || 'Launch failed.', 'err');
+    }
+  } catch (e) {
+    showStatus('Request failed: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function stopInstance(slot) {
+  if (!confirm(`Stop instance ${slot}?`)) return;
+  try {
+    const r    = await fetch(`/api/instances/${slot}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (r.ok) {
+      showStatus(`Instance ${slot} stopped.`, 'ok');
+      fetchInstances();
+    } else {
+      showStatus(data.error || 'Stop failed.', 'err');
+    }
+  } catch (e) {
+    showStatus('Request failed: ' + e.message, 'err');
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function showStatus(msg, type) {
+  const el = document.getElementById('launch-status');
+  el.textContent = msg;
+  el.className   = `status-bar show ${type}`;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).catch(() => {
+    const el = document.createElement('input');
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+  });
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function truncate(s, n) {
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function formatAge(ts) {
+  const s = Math.floor(Date.now() / 1000 - ts);
+  if (s < 60)  return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s/60)}m ago`;
+  return `${Math.floor(s/3600)}h ago`;
+}
+
+// ── Test panel ──────────────────────────────────────────────────────────────
+function updateTestSlots(instances) {
+  const sel = document.getElementById('test-slot');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const running = instances.filter(i => i.status === 'running');
+  if (!running.length) {
+    sel.innerHTML = '<option value="">No instances</option>';
+    return;
+  }
+  running.forEach(inst => {
+    const opt = document.createElement('option');
+    opt.value = inst.slot;
+    opt.textContent = `Slot ${inst.slot}`;
+    opt.dataset.model = inst.cmd.split(' ')[0];
+    sel.appendChild(opt);
+  });
+  if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+}
+
+async function sendTestRequest() {
+  const sel = document.getElementById('test-slot');
+  const slot = sel.value;
+  if (!slot) { alert('No running instance selected.'); return; }
+
+  const model = sel.selectedOptions[0].dataset.model || 'default';
+  const msg = document.getElementById('test-msg').value.trim();
+  if (!msg) return;
+
+  const btn = document.getElementById('test-btn');
+  const output = document.getElementById('test-output');
+  const meta = document.getElementById('test-meta');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Streaming…';
+  output.textContent = '';
+  output.classList.remove('placeholder');
+  meta.textContent = '';
+
+  const startTime = performance.now();
+
+  try {
+    const res = await fetch(`/vllm/${slot}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: 'user', content: msg }],
+        stream: true
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      output.textContent = `Error ${res.status}: ${err}`;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let tokens = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) {
+            output.textContent += delta;
+            tokens++;
+          }
+        } catch (_) {}
+      }
+    }
+
+    const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+    const tps = tokens > 0 ? (tokens / parseFloat(elapsed)).toFixed(1) : '—';
+    meta.innerHTML = `<span>Time: ${elapsed}s</span><span>Tokens: ${tokens}</span><span>Speed: ${tps} tok/s</span>`;
+
+  } catch (e) {
+    output.textContent = `Request failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Send';
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+fetchHealth();
+fetchInstances();
+setInterval(fetchInstances, 5000);
+</script>
+</body>
+</html>

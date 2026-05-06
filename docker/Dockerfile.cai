@@ -1,0 +1,52 @@
+# Cloudera AI Inference (CAI) – vLLM CUDA Docker Image
+#
+# CAI routes external HTTPS traffic to container port 8080, so the server
+# MUST listen on 8080 (enforced by the entrypoint script).
+#
+# Build:
+#   docker build -f docker/Dockerfile.cai -t vllm-cai .
+#
+#   # Pin to a specific vLLM release:
+#   docker build -f docker/Dockerfile.cai \
+#     --build-arg VLLM_VERSION=0.9.0 \
+#     -t vllm-cai .
+#
+# Run locally:
+#   docker run --gpus all -p 8080:8080 \
+#     -e MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     vllm-cai
+#
+#   # Pass extra vLLM flags via VLLM_ARGS:
+#   docker run --gpus all -p 8080:8080 \
+#     -e MODEL=meta-llama/Llama-3.1-8B-Instruct \
+#     -e VLLM_ARGS="--tensor-parallel-size 2 --max-model-len 8192" \
+#     vllm-cai
+#
+# Push to registry for CAI deployment:
+#   docker tag vllm-cai <registry>/vllm-cai:<tag>
+#   docker push <registry>/vllm-cai:<tag>
+
+ARG VLLM_VERSION=latest
+
+FROM vllm/vllm-openai:${VLLM_VERSION}
+
+# ── System dependencies ────────────────────────────────────────────────────────
+RUN apt-get update -qq && \
+    apt-get install -y -qq --no-install-recommends nginx && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Simple single-model entrypoint (legacy / fallback) ────────────────────────
+COPY docker/cai-entrypoint.sh /usr/local/bin/cai-entrypoint.sh
+RUN chmod +x /usr/local/bin/cai-entrypoint.sh
+
+# ── Advanced entrypoint: nginx ingress + web-based multi-instance launcher ─────
+COPY docker/cai_implementation/ /usr/local/bin/cai_implementation/
+RUN chmod +x /usr/local/bin/cai_implementation/entrypoint.sh
+
+# CAI maps external port 443 → container port 8080.
+EXPOSE 8080
+
+# Default: advanced entrypoint with nginx + web UI.
+# To use the simple single-model entrypoint instead, override at runtime:
+#   docker run ... --entrypoint /usr/local/bin/cai-entrypoint.sh ...
+ENTRYPOINT ["/usr/local/bin/cai_implementation/entrypoint.sh"]
